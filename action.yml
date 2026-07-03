@@ -1,5 +1,5 @@
-name: "ReviewGate"
-description: "Pre-merge quality gate for AI-generated code: parallel multi-dimension review, counter-evidence validation, confidence gating — never fakes a PASS"
+name: "ReviewGate AI Code Review"
+description: "Pre-merge quality gate for AI-generated code: multi-dimension LLM review, confidence gating, never fakes a PASS."
 branding:
   icon: "shield"
   color: "purple"
