@@ -1,0 +1,76 @@
+name: "ReviewGate"
+description: "Pre-merge quality gate for AI-generated code: parallel multi-dimension review, counter-evidence validation, confidence gating — never fakes a PASS"
+branding:
+  icon: "shield"
+  color: "purple"
+
+inputs:
+  dimensions:
+    description: "审查维度：all 或逗号分隔 security,perf,logic,style,ai_smell"
+    required: false
+    default: "all"
+  fail-on:
+    description: "何种判定导致 CI 失败：block | warn | never"
+    required: false
+    default: "block"
+  comment:
+    description: "是否在 PR 上发布摘要评论"
+    required: false
+    default: "true"
+  timeout:
+    description: "单维度墙钟超时（秒）；超时跳过该维度但保留已确认发现并告警，防止 CI 长时间挂起"
+    required: false
+    default: "300"
+  config:
+    description: "reviewgate.toml 配置文件路径"
+    required: false
+    default: "reviewgate.toml"
+  version:
+    description: "ReviewGate 版本（默认 latest）"
+    required: false
+    default: "latest"
+  intent:
+    description: "意图/技术评审：auto = 自动用 PR 标题+描述作为 --intent（描述写得越像验收标准效果越好；模糊标题可能产生「未核对」项并降级 WARN）；off = 不做意图评审；或填意图文档路径。默认 off"
+    required: false
+    default: "off"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install ReviewGate
+      shell: bash
+      # install.sh 随本仓库一起按用户 pin 的 ref checkout——pin 了 tag 的用户不受 main 变动影响。
+      run: |
+        REVIEWGATE_VERSION="${{ inputs.version }}" sh "$GITHUB_ACTION_PATH/install.sh"
+
+    - name: Run ReviewGate
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+        REVIEWGATE_CONFIG: ${{ inputs.config }}
+        # PR 标题/描述经 env 传入（而非直接插进 shell），避免恶意标题里的 $()/反引号被执行。
+        PR_TITLE: ${{ github.event.pull_request.title }}
+        PR_BODY: ${{ github.event.pull_request.body }}
+        INTENT_MODE: ${{ inputs.intent }}
+      run: |
+        ARGS="--dimensions ${{ inputs.dimensions }} --fail-on ${{ inputs.fail-on }} --timeout ${{ inputs.timeout }}"
+        if [ "${{ inputs.comment }}" = "true" ]; then ARGS="$ARGS --comment"; fi
+        # PR 事件：CI 检出的是已提交的合并状态、工作区无未提交改动；
+        # 必须按 base...head 范围审，否则默认的"工作区 diff"为空、审不到任何东西。
+        BASE="${{ github.event.pull_request.base.sha }}"
+        HEAD="${{ github.event.pull_request.head.sha }}"
+        if [ -n "$BASE" ] && [ -n "$HEAD" ]; then
+          ARGS="$ARGS --from $BASE --to $HEAD"
+        fi
+        # 意图评审：auto = 用 PR 标题+描述；off = 关闭；其它值当作意图文档路径。
+        case "$INTENT_MODE" in
+          auto)
+            if [ -n "$BASE" ] && [ -n "$PR_TITLE" ]; then
+              printf '%s\n\n%s\n' "$PR_TITLE" "$PR_BODY" > "$RUNNER_TEMP/reviewgate-intent.md"
+              ARGS="$ARGS --intent $RUNNER_TEMP/reviewgate-intent.md"
+            fi
+            ;;
+          off|"") ;;
+          *) ARGS="$ARGS --intent $INTENT_MODE" ;;
+        esac
+        reviewgate review $ARGS
